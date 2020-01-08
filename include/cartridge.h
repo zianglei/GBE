@@ -17,18 +17,30 @@ using namespace std;
 class CartridgeHeader {
 
 public:
-    explicit CartridgeHeader(ifstream& cartridge) {
+    explicit CartridgeHeader(ifstream & cartridge) {
         if (!cartridge) {
             throw invalid_argument("The cartridge is not opened");
+        }
+
+        char contents[CHECKSUM_SCALE] = {}; // only used to calculate checksum.
+
+        // get the header checksum and verify the header.
+        cartridge.seekg(CHECKSUM_OFFSET);
+        if (!cartridge) {
+            throw invalid_argument("Cannot get header checksum from the stream!");
+        }
+        uchar headersum;
+        cartridge >> headersum;
+        cartridge.seekg(CHECKSUM_BEGIN_OFFSET);
+        cartridge.read(contents, CHECKSUM_SCALE);
+
+        if (!isValid(contents, headersum)) {
+            throw invalid_argument("The cartridge header checksum is wrong!");
         }
 
         cartridge.seekg(0);
         cartridge.read(reinterpret_cast<char*>(entryPoint.data()), entryPoint.size());
         cartridge.read(reinterpret_cast<char*>(logo.data()), logo.size());
-
-        char contents[CHECKSUM_SCALE] = {}; // only used to calculate checksum.
-        cartridge.read(contents, CHECKSUM_SCALE);
-        cartridge.seekg(cartridge.gcount() - CHECKSUM_SCALE);
 
         // fixme: Only support non-CGB mode for now.
         cartridge.width(16);
@@ -41,31 +53,77 @@ public:
                 >> destinationCode >> oldLicenseCode >> maskRomVerNumber
                 >> headerChecksum >> globalChecksum;
 
-        if (!isValid(contents)) {
+        // Delete null chars at the end of the title.
+        for (auto sit = title.begin(); sit != title.end(); ++sit) {
+            if (!isalnum(*sit)) {
+                title.erase(sit, title.end());
+                break;
+            }
+        }
+    }
+
+    explicit CartridgeHeader(vector<uchar> const & cartridge) {
+        if (cartridge.size() != 80) {
+            throw invalid_argument("The vector length is not equal to the header length.");
+        }
+
+        char contents[CHECKSUM_SCALE];
+        uchar checksum = cartridge[CHECKSUM_OFFSET];
+
+        copy(cartridge.cbegin() + CHECKSUM_BEGIN_OFFSET, cartridge.cbegin() + CHECKSUM_BEGIN_OFFSET + CHECKSUM_SCALE, contents);
+        if (!isValid(contents, checksum)) {
             throw invalid_argument("The cartridge header checksum is wrong!");
+        }
+
+        auto it = cartridge.cbegin();
+        copy(it, it + entryPoint.size(), entryPoint.data()); it += entryPoint.size();
+        copy(it, it + logo.size(), logo.data()); it += logo.size();
+
+        title.append(it, it + 16); it += 16;
+
+        newLicenseCode.append(it, it + 2); it += 2;
+        sgbFlag = *it++;
+        cartridgeType = *it++;
+        romSize = *it++;
+        ramSize = *it++;
+        destinationCode = *it++;
+        oldLicenseCode = *it++;
+        maskRomVerNumber = *it++;
+        headerChecksum = *it++;
+        globalChecksum = (((*it) << 8u) | (*(it + 1)));
+
+        // Delete null chars at the end of the title.
+        for (auto sit = title.begin(); sit != title.end(); ++sit) {
+            if (!isalnum(*sit)) {
+                title.erase(sit, title.end());
+                break;
+            }
         }
     }
 
 private:
                                               // byte position
-    array<char , 4> entryPoint{};              // 0100h-0103h
-    array<char, 48> logo{};                   // 0104h-0133h
+    array<uchar, 4> entryPoint{};             // 0100h-0103h
+    array<uchar, 48> logo{};                   // 0104h-0133h
 
     string title = "";
     string newLicenseCode = "";
 
-    char sgbFlag = 0;
-    char cartridgeType = 0;
-    char romSize = 0;
-    char ramSize = 0;
-    char destinationCode = 0;
-    char oldLicenseCode = 0;
-    char maskRomVerNumber = 0;
-    char headerChecksum = 0;
+    uchar sgbFlag = 0;
+    uchar cartridgeType = 0;
+    uchar romSize = 0;
+    uchar ramSize = 0;
+    uchar destinationCode = 0;
+    uchar oldLicenseCode = 0;
+    uchar maskRomVerNumber = 0;
+    uchar headerChecksum = 0;
     uint16_t globalChecksum = 0;              // 014Eh-014Fh
 
 private:
     static constexpr int CHECKSUM_SCALE = 25;
+    static constexpr int HEADER_LENGTH = 80;
+    static constexpr int CHECKSUM_BEGIN_OFFSET = 52; // begin from 0x134;
+    static constexpr int CHECKSUM_OFFSET = 77;  // 0x014D
 
 private:
     /**
@@ -73,12 +131,12 @@ private:
      *   x=0:FOR i=0134h TO 014Ch: x=x-MEM[i]-1:NEXT
      * @return true if the calculated checksum is equal to the checksum in the header.
      */
-    bool isValid(char (&contents)[CHECKSUM_SCALE]) noexcept {
+    static bool isValid(char (&contents)[CHECKSUM_SCALE], uchar checksum) noexcept {
         uint8_t x = 0;
         for (uint8_t b: contents) {
             x -= b + 1;
         }
-        return x == headerChecksum;
+        return x == checksum;
     }
 
 public:
@@ -87,18 +145,44 @@ public:
         return title;
     }
 
-    [[nodiscard]] char getCartridgeType() const noexcept {
+    [[nodiscard]] array<uchar, 4> const & getEntryPoint() const noexcept {
+        return entryPoint;
+    }
+
+    [[nodiscard]] array<uchar, 48> const & getLogo() const noexcept {
+        return logo;
+    }
+
+    [[nodiscard]] string getLicenseCode() const noexcept {
+        if (oldLicenseCode == 0x33) {
+            return newLicenseCode;
+        }
+        return string{static_cast<char>(oldLicenseCode)};
+    };
+
+    [[nodiscard]] bool isEnableSGB() const noexcept {
+        return sgbFlag == 0x03;
+    }
+
+    [[nodiscard]] uchar getCartridgeType() const noexcept {
         return cartridgeType;
     }
 
-    [[nodiscard]] char getRomSize() const noexcept {
+    [[nodiscard]] uchar getRomSize() const noexcept {
         return romSize;
     }
 
-    [[nodiscard]] char getRamSize() const noexcept {
+    [[nodiscard]] uchar getRamSize() const noexcept {
         return ramSize;
     }
 
+    [[nodiscard]] uchar getDestinationCode() const noexcept {
+        return destinationCode;
+    }
+
+    [[nodiscard]] uchar getVersion() const noexcept {
+        return maskRomVerNumber;
+    }
 };
 
 class Cartridge {
