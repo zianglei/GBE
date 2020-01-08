@@ -12,14 +12,12 @@
 #include <fstream>
 #include <stdexcept>
 
-using namespace std;
-
 class CartridgeHeader {
 
 public:
-    explicit CartridgeHeader(ifstream & cartridge) {
+    explicit CartridgeHeader(std::istream & cartridge) {
         if (!cartridge) {
-            throw invalid_argument("The cartridge is not opened");
+            throw std::invalid_argument("The cartridge is not opened");
         }
 
         char contents[CHECKSUM_SCALE] = {}; // only used to calculate checksum.
@@ -27,7 +25,7 @@ public:
         // get the header checksum and verify the header.
         cartridge.seekg(CHECKSUM_OFFSET);
         if (!cartridge) {
-            throw invalid_argument("Cannot get header checksum from the stream!");
+            throw std::invalid_argument("Cannot get header checksum from the stream!");
         }
         uchar headersum;
         cartridge >> headersum;
@@ -35,7 +33,7 @@ public:
         cartridge.read(contents, CHECKSUM_SCALE);
 
         if (!isValid(contents, headersum)) {
-            throw invalid_argument("The cartridge header checksum is wrong!");
+            throw std::invalid_argument("The cartridge header checksum is wrong!");
         }
 
         cartridge.seekg(0);
@@ -62,9 +60,9 @@ public:
         }
     }
 
-    explicit CartridgeHeader(vector<uchar> const & cartridge) {
+    explicit CartridgeHeader(std::vector<uchar> const & cartridge) {
         if (cartridge.size() != 80) {
-            throw invalid_argument("The vector length is not equal to the header length.");
+            throw std::invalid_argument("The vector length is not equal to the header length.");
         }
 
         char contents[CHECKSUM_SCALE];
@@ -72,7 +70,7 @@ public:
 
         copy(cartridge.cbegin() + CHECKSUM_BEGIN_OFFSET, cartridge.cbegin() + CHECKSUM_BEGIN_OFFSET + CHECKSUM_SCALE, contents);
         if (!isValid(contents, checksum)) {
-            throw invalid_argument("The cartridge header checksum is wrong!");
+            throw std::invalid_argument("The cartridge header checksum is wrong!");
         }
 
         auto it = cartridge.cbegin();
@@ -103,11 +101,11 @@ public:
 
 private:
                                               // byte position
-    array<uchar, 4> entryPoint{};             // 0100h-0103h
-    array<uchar, 48> logo{};                   // 0104h-0133h
+    std::array<uchar, 4> entryPoint{};             // 0100h-0103h
+    std::array<uchar, 48> logo{};                   // 0104h-0133h
 
-    string title = "";
-    string newLicenseCode = "";
+    std::string title;
+    std::string newLicenseCode;
 
     uchar sgbFlag = 0;
     uchar cartridgeType = 0;
@@ -141,23 +139,23 @@ private:
 
 public:
 
-    string& getTitle() noexcept {
+    std::string& getTitle() noexcept {
         return title;
     }
 
-    [[nodiscard]] array<uchar, 4> const & getEntryPoint() const noexcept {
+    [[nodiscard]] std::array<uchar, 4> const & getEntryPoint() const noexcept {
         return entryPoint;
     }
 
-    [[nodiscard]] array<uchar, 48> const & getLogo() const noexcept {
+    [[nodiscard]] std::array<uchar, 48> const & getLogo() const noexcept {
         return logo;
     }
 
-    [[nodiscard]] string getLicenseCode() const noexcept {
+    [[nodiscard]] std::string getLicenseCode() const noexcept {
         if (oldLicenseCode == 0x33) {
             return newLicenseCode;
         }
-        return string{static_cast<char>(oldLicenseCode)};
+        return std::string{static_cast<char>(oldLicenseCode)};
     };
 
     [[nodiscard]] bool isEnableSGB() const noexcept {
@@ -189,20 +187,71 @@ class Cartridge {
 
 public:
 
+    using Address = uint16_t;
     /**
      * Load a rom from the input stream.
      * @param stream
      */
-    explicit Cartridge(ifstream& file): header(file) {
-
+    explicit Cartridge(std::ifstream& file): header(file) {
+        CartridgeType t = getType(header.getCartridgeType());
     }
+
+
+public:
+
+    enum class CartridgeType {
+        None,
+        MBC1,
+        MBC2,
+        MBC3,
+        MBC4,
+        MBC5,
+        HuC1
+    };
+
+    /**
+     * Read one byte which is specified by address
+     */
+    virtual uchar readAt(Address address);
 
 protected:
 
     CartridgeHeader header;
+    static CartridgeType getType(uchar type) {
+        switch (type) {
+            case 0x00:
+                return CartridgeType::None;
+            case 0x01:
+            case 0x02:
+            case 0x03:
+                return CartridgeType::MBC1;
+            case 0x05:
+            case 0x06:
+                return CartridgeType::MBC2;
+            case 0x0F:
+            case 0x10:
+            case 0x11:
+            case 0x12:
+            case 0x13:
+                return CartridgeType::MBC3;
+            case 0x15:
+            case 0x16:
+            case 0x17:
+                return CartridgeType::MBC4;
+            case 0x19:
+            case 0x1A:
+            case 0x1B:
+            case 0x1C:
+            case 0x1D:
+            case 0x1E:
+                return CartridgeType::MBC5;
+            case 0xFF:
+                return CartridgeType::HuC1;
+            default:
+                throw std::invalid_argument("Not implemented cartridge type");
+        }
+    }
 
-    /* The content of the cartridge will be stored in this vector */
-//    vector<unsigned char> rom;
 
 };
 
