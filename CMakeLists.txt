@@ -15,4 +15,6 @@ add_executable(GBE
 
 
 add_executable(cartridge_test
-        test/test-cartridge.cpp)
+        test/test-main.cpp
+        test/test-cartridge.cpp
+        src/cartridge.cpp)

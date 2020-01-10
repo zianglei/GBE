@@ -11,6 +11,10 @@
 #include <array>
 #include <fstream>
 #include <stdexcept>
+#include <vector>
+#include "address.h"
+
+using uchar = unsigned char;
 
 class CartridgeHeader {
 
@@ -60,20 +64,20 @@ public:
         }
     }
 
-    explicit CartridgeHeader(std::vector<uchar> const & cartridge) {
-        if (cartridge.size() != 80) {
+    explicit CartridgeHeader(std::vector<uchar> const & bytes) {
+        if (bytes.size() != 80) {
             throw std::invalid_argument("The vector length is not equal to the header length.");
         }
 
         char contents[CHECKSUM_SCALE];
-        uchar checksum = cartridge[CHECKSUM_OFFSET];
+        uchar checksum = bytes[CHECKSUM_OFFSET];
 
-        copy(cartridge.cbegin() + CHECKSUM_BEGIN_OFFSET, cartridge.cbegin() + CHECKSUM_BEGIN_OFFSET + CHECKSUM_SCALE, contents);
+        copy(bytes.cbegin() + CHECKSUM_BEGIN_OFFSET, bytes.cbegin() + CHECKSUM_BEGIN_OFFSET + CHECKSUM_SCALE, contents);
         if (!isValid(contents, checksum)) {
             throw std::invalid_argument("The cartridge header checksum is wrong!");
         }
 
-        auto it = cartridge.cbegin();
+        auto it = bytes.cbegin();
         copy(it, it + entryPoint.size(), entryPoint.data()); it += entryPoint.size();
         copy(it, it + logo.size(), logo.data()); it += logo.size();
 
@@ -187,17 +191,27 @@ class Cartridge {
 
 public:
 
-    using Address = uint16_t;
     /**
      * Load a rom from the input stream.
      * @param stream
      */
-    explicit Cartridge(std::ifstream& file): header(file) {
-        CartridgeType t = getType(header.getCartridgeType());
+    explicit Cartridge(std::ifstream& file){
+        file.read(reinterpret_cast<char *>(_data.data()), file.tellg());
+        _header = std::make_unique<CartridgeHeader>(_data);
+        _capacity = _data.size();
     }
 
+    explicit Cartridge(std::vector<uchar>&& cartridge) {
+        _data = std::move(cartridge);
+        _capacity = _data.size();
+    }
 
 public:
+
+    virtual uchar read(const Address& address) const = 0;
+    virtual void write(const Address& address, uchar data)  = 0;
+
+protected:
 
     enum class CartridgeType {
         None,
@@ -208,15 +222,6 @@ public:
         MBC5,
         HuC1
     };
-
-    /**
-     * Read one byte which is specified by address
-     */
-    virtual uchar readAt(Address address);
-
-protected:
-
-    CartridgeHeader header;
     static CartridgeType getType(uchar type) {
         switch (type) {
             case 0x00:
@@ -252,6 +257,64 @@ protected:
         }
     }
 
+
+    std::unique_ptr<CartridgeHeader> _header;
+    std::vector<uchar> _data;
+    size_t _capacity;
+
+
+};
+
+/**
+ * 32KByte ROM only.
+ */
+class RomCartridge: public Cartridge {
+
+public:
+
+    [[nodiscard]] uchar read(const Address& address) const override;
+    /**
+     * The ROM is not writable.
+     */
+    void write(const Address &address, unsigned char data) override;
+};
+
+/**
+ *
+ */
+class MBC1: public Cartridge {
+
+public:
+    explicit MBC1(std::ifstream &file) : Cartridge(file){}
+    explicit MBC1(std::vector<uchar> &data) : Cartridge(std::move(data)) {}
+
+    [[nodiscard]] uchar read(const Address &address) const override;
+    void write(const Address &address, uchar data) override;
+
+private:
+    /**
+     * Before external RAM can be read or written,
+     * it must be enabled by writing to this address space
+     */
+    uchar ramEnabled{0x00};
+    /* Writing to this address space selects the lower 5 bits of
+     * the ROM Bank Number (in range 01-1Fh) */
+    uchar romBankNumber{0x01};
+    /**
+     * This 2bit register can be used to select a RAM Bank in range from 00-03h,
+     *  or to specify the upper two bits (Bit 5-6) of the ROM Bank number,
+     *  depending on the current ROM/RAM Mode.
+     */
+    uchar ramBankNumber{0x00};
+    /**
+     * This register selects whether the two bits of the above register should be used as
+     * upper two bits of the ROM bank, or as RAM Bank Number.
+     */
+    uchar modeSelect{0x00};
+
+};
+
+class MBC2: public Cartridge {
 
 };
 
